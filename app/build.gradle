@@ -18,10 +18,12 @@ android {
 
     signingConfigs {
         release {
-            storeFile rootProject.file('.signing/edge-securedns.jks')
-            storePassword 'edge-securedns'
-            keyAlias 'edge-securedns'
-            keyPassword 'edge-securedns'
+            // 签名参数可用环境变量覆盖（GitHub Actions 构建用），未设置时用本地默认密钥。
+            // 本地默认：.signing/edge-securedns.jks，密码均为 edge-securedns，alias edge-securedns。
+            storeFile rootProject.file(System.getenv('SIGNING_STORE_FILE') ?: '.signing/edge-securedns.jks')
+            storePassword System.getenv('SIGNING_STORE_PASSWORD') ?: 'edge-securedns'
+            keyAlias System.getenv('SIGNING_KEY_ALIAS') ?: 'edge-securedns'
+            keyPassword System.getenv('SIGNING_KEY_PASSWORD') ?: 'edge-securedns'
         }
     }
 
