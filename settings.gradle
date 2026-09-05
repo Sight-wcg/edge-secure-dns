@@ -1,0 +1,21 @@
+// Maven 仓库：阿里云镜像优先（国内直连快、且 Maven Central 对部分网络返回 403），
+// google() 官方源兜底。海外用户如需纯官方源，可删除前两个 maven 块。
+pluginManagement {
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        google()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        google()
+    }
+}
+rootProject.name = 'edge-secure-dns'
+include ':app'

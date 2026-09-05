@@ -1,0 +1,4 @@
+# 复制本文件为 local.properties 并按实际路径修改（local.properties 不入库）。
+# 用 Android Studio 打开本工程通常无需此文件；仅命令行构建时需要指定 SDK 位置，
+# 也可以改用环境变量 ANDROID_HOME 代替。
+sdk.dir=D:/path/to/Android/Sdk

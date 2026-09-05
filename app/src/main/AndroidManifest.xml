@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name">
+
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="恢复 Microsoft Edge (Chromium) 设置中隐藏的「使用安全 DNS」入口" />
+        <meta-data android:name="xposedminversion" android:value="82" />
+        <meta-data
+            android:name="xposedscope"
+            android:value="com.microsoft.emmx.beta,com.microsoft.emmx" />
+    </application>
+
+</manifest>

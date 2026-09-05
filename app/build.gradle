@@ -1,0 +1,43 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.cyan.emmx.securedns'
+    // compileSdk 34：AGP 7.4.x 自带的 aapt2 无法解析 android-35+ 平台的 resources.arsc，
+    // 本模块只用到基础 API，用 34 即可获得所有环境开箱即用的构建。
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.cyan.emmx.securedns'
+        minSdk 26
+        targetSdk 29
+        versionCode 5
+        versionName '1.0.4'
+    }
+
+    signingConfigs {
+        release {
+            storeFile rootProject.file('.signing/edge-securedns.jks')
+            storePassword 'edge-securedns'
+            keyAlias 'edge-securedns'
+            keyPassword 'edge-securedns'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+
+dependencies {
+    compileOnly 'de.robv.android.xposed:api:82'
+}

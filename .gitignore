@@ -1,0 +1,28 @@
+# Gradle
+.gradle/
+build/
+
+# 本机构建配置（含本机 SDK 路径，不入库）
+local.properties
+
+# 签名密钥（含密码，严禁入库）
+.signing/
+
+# 构建产物
+dist/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# ZCode 会话文件
+.zcode/
+
+# 日志
+*.log
