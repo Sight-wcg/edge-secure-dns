@@ -1,20 +1,35 @@
-// Maven 仓库：阿里云镜像优先（国内直连快、且 Maven Central 对部分网络返回 403），
-// google() 官方源兜底。海外用户如需纯官方源，可删除前两个 maven 块。
+// Maven 仓库策略：
+// - CI（GitHub Actions 设 CI=true）：官方源优先，稳定且快，不碰镜像。
+// - 本地（国内网络）：google() 优先，阿里云镜像兜底（Maven Central 对部分网络
+//   返回 403，Gradle 遇到 403/5xx 会中止而非换仓库，所以镜像必须排在 central 前）。
+def useOfficialRepos = System.getenv('CI') == 'true'
+
 pluginManagement {
     repositories {
-        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
-        maven { url 'https://maven.aliyun.com/repository/google' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
         google()
-        gradlePluginPortal()
+        if (useOfficialRepos) {
+            gradlePluginPortal()
+            mavenCentral()
+        } else {
+            maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+            maven { url 'https://maven.aliyun.com/repository/google' }
+            maven { url 'https://maven.aliyun.com/repository/public' }
+            gradlePluginPortal()
+            mavenCentral()
+        }
     }
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        maven { url 'https://maven.aliyun.com/repository/google' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
         google()
+        if (useOfficialRepos) {
+            mavenCentral()
+        } else {
+            maven { url 'https://maven.aliyun.com/repository/google' }
+            maven { url 'https://maven.aliyun.com/repository/public' }
+            mavenCentral()
+        }
     }
 }
 rootProject.name = 'edge-secure-dns'
