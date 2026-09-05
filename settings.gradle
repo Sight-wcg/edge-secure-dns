@@ -2,12 +2,12 @@
 // - CI（GitHub Actions 设 CI=true）：官方源优先，稳定且快，不碰镜像。
 // - 本地（国内网络）：google() 优先，阿里云镜像兜底（Maven Central 对部分网络
 //   返回 403，Gradle 遇到 403/5xx 会中止而非换仓库，所以镜像必须排在 central 前）。
-def useOfficialRepos = System.getenv('CI') == 'true'
-
+// 注意：pluginManagement 必须是脚本第一条语句，条件变量只能在块内计算。
 pluginManagement {
+    def official = System.getenv('CI') == 'true'
     repositories {
         google()
-        if (useOfficialRepos) {
+        if (official) {
             gradlePluginPortal()
             mavenCentral()
         } else {
@@ -21,9 +21,10 @@ pluginManagement {
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    def official = System.getenv('CI') == 'true'
     repositories {
         google()
-        if (useOfficialRepos) {
+        if (official) {
             mavenCentral()
         } else {
             maven { url 'https://maven.aliyun.com/repository/google' }
