@@ -41,5 +41,7 @@ android {
 }
 
 dependencies {
-    compileOnly 'de.robv.android.xposed:api:82'
+    // Xposed API 直接 vendor 在 libs/（源：de.robv.android.xposed:api:82，jcenter 系镜像才有，
+    // Maven Central 没有；vendor 后 CI 与本地构建都不依赖任何第三方仓库）。
+    compileOnly fileTree(dir: 'libs', include: ['*.jar'])
 }
