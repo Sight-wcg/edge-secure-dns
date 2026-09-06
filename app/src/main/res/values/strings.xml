@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Edge Secure DNS</string>
+    <string name="module_description">Restore the hidden \"Use secure DNS\" entry in Microsoft Edge (Chromium) settings</string>
 </resources>

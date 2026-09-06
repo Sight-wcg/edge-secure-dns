@@ -1,18 +1,18 @@
 package com.cyan.emmx.securedns;
 
 import android.app.Activity;
-import android.app.Application;
 import android.content.Context;
 import android.os.Bundle;
+import android.util.Log;
 
 import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import io.github.libxposed.api.XposedInterface.HookHandle;
+import io.github.libxposed.api.XposedModule;
+import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam;
+import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam;
+import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam;
 
 /**
  * Restores the hidden "Use secure DNS" entry in Microsoft Edge (Chromium) Android settings.
@@ -23,31 +23,36 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * and its localized strings are still shipped in the APK, so re-adding one preference that
  * launches that fragment brings the whole feature back.
  *
- * Works both as an LSPosed module and embedded via NPatch (classic Xposed API + assets/xposed_init,
- * no dependency on the module APK's own resources).
+ * Built against the modern Xposed API (libxposed API 102); requires a framework that implements
+ * it (minApiVersion=101 in META-INF/xposed/module.prop). Legacy de.robv APIs are not used.
  *
- * Edge installs a custom AppComponentFactory whose class loader only becomes visible to the
- * framework after application attach, so the hook is registered lazily: the first candidate
- * loader that can actually resolve Edge classes wins.
+ * Edge installs a custom AppComponentFactory whose class loader differs from the default one.
+ * The modern lifecycle covers this directly: onPackageLoaded offers the default loader, and
+ * onPackageReady fires after the AppComponentFactory has instantiated its class loader, so the
+ * Edge loader is visible without the Application.attach / Activity.onCreate retry ladder the
+ * legacy API needed. An Activity.onCreate retry is still armed as a last resort for builds
+ * whose privacy fragment only becomes loadable later.
  */
-public class MainHook implements IXposedHookLoadPackage {
+public class MainHook extends XposedModule {
 
     private static final String TAG = "EdgeSecureDNS";
 
     private static final String[] TARGET_PACKAGES = {
             "com.microsoft.emmx.beta",
             "com.microsoft.emmx",
+            "com.microsoft.emmx.canary",
     };
 
-    /** onCreatePreferences of Edge's real privacy page (verified on Edge Beta 153.0.4234.18). */
+    /** onCreatePreferences of Edge's real privacy page (verified: Edge Beta 153 / Canary 154). */
     private static final String PRIVACY_FRAGMENT =
             "org.chromium.chrome.browser.edge_settings.EdgePrivacySettings";
     /**
      * Known names of the privacy fragment's onCreatePreferences. The method is R8-renamed in
-     * release builds (currently "R1"); these are only fast-path hints — if none matches, the
-     * method is located by its (Bundle, String) -> void signature instead.
+     * release builds ("R1" on Beta 153, "T1" on Canary 154); these are only fast-path hints —
+     * if none matches, the method is located by its (Bundle, String) -> void signature instead.
      */
-    private static final String[] PRIVACY_ON_CREATE_CANDIDATES = {"R1", "onCreatePreferences"};
+    private static final String[] PRIVACY_ON_CREATE_CANDIDATES = {
+            "T1", "R1", "onCreatePreferences"};
 
     /** First loadable wins; later candidates cover older/newer Chromium layouts. */
     private static final String[] SECURE_DNS_FRAGMENT_CANDIDATES = {
@@ -67,9 +72,14 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String KEY_SECURITY_CATEGORY = "security";
     private static final int ORDER_IN_CATEGORY = 5;
 
-    /** String resource ids verified on Edge Beta 153.0.4234.18; content-checked before use. */
-    private static final int RES_SECURE_DNS_TITLE = 0x7f14272a;
-    private static final int RES_SECURE_DNS_SUMMARY = 0x7f142727;
+    /**
+     * Secure DNS title/summary string ids, verified per build (all content-checked at runtime;
+     * resource ids shift between Edge releases, so every known build gets its own pair).
+     */
+    private static final int[][] RES_SECURE_DNS_IDS = {
+            {0x7f14272a, 0x7f142727}, // Edge Beta 153.0.4234.18
+            {0x7f142785, 0x7f142782}, // Edge Canary 154.0.4257.0
+    };
 
     private static final String FALLBACK_TITLE_ZH = "使用安全的 DNS";
     private static final String FALLBACK_SUMMARY_ZH = "确定如何通过安全连接来连接到网站";
@@ -77,48 +87,71 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final String FALLBACK_SUMMARY_EN =
             "Determines how to connect to websites over a secure connection";
 
-    private static final AtomicBoolean REGISTERED = new AtomicBoolean(false);
+    /** Per module generation; hooks from a previous generation are unhooked on hot reload. */
+    private final AtomicBoolean registered = new AtomicBoolean(false);
+    private HookHandle activityHook;
 
     @Override
-    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpp) {
-        if (!isTarget(lpp.packageName)) return;
-        log("loaded into " + lpp.packageName + " (loader=" + loaderName(lpp.classLoader) + ")");
+    public void onModuleLoaded(ModuleLoadedParam param) {
+        log("loaded into " + param.getProcessName()
+                + ", framework " + getFrameworkName() + " " + getFrameworkVersion()
+                + ", api " + getApiVersion());
+    }
 
-        // Fast path: the default app loader can already resolve Edge classes.
-        tryRegister(new ClassLoader[]{lpp.classLoader});
+    /** Default class loader ready; Edge's AppComponentFactory has not run yet. */
+    @Override
+    public void onPackageLoaded(PackageLoadedParam param) {
+        if (!isTarget(param.getPackageName())) return;
+        log("onPackageLoaded " + param.getPackageName()
+                + " (default loader=" + loaderName(param.getDefaultClassLoader()) + ")");
+        tryRegister(new ClassLoader[]{param.getDefaultClassLoader()});
+    }
 
-        // Edge swaps in a custom class loader during startup (its AppComponentFactory installs
-        // one); at handleLoadPackage time lpp.classLoader may not see Edge classes yet. Retry
-        // with the loaders that actually load the Application and each Activity.
-        try {
-            XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            Application app = (Application) param.thisObject;
-                            tryRegister(new ClassLoader[]{
-                                    app.getClass().getClassLoader(),
-                                    ((Context) param.args[0]).getClassLoader(),
-                            });
-                        }
-                    });
-            log("application attach retry armed");
-        } catch (Throwable t) {
-            log("attach hook failed: " + t);
+    /**
+     * AppComponentFactory has instantiated the class loader; for Edge this is the custom loader
+     * that was invisible at load time under the legacy API.
+     */
+    @Override
+    public void onPackageReady(PackageReadyParam param) {
+        if (!isTarget(param.getPackageName())) return;
+        log("onPackageReady " + param.getPackageName()
+                + " (loader=" + loaderName(param.getClassLoader()) + ")");
+        tryRegister(new ClassLoader[]{param.getClassLoader(), param.getDefaultClassLoader()});
+
+        if (!registered.get() && activityHook == null) {
+            armActivityRetry();
         }
+    }
+
+    /** Last-resort retry: re-check on every Activity creation until registration succeeds. */
+    private void armActivityRetry() {
         try {
-            XposedHelpers.findAndHookMethod(Activity.class, "onCreate", Bundle.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            tryRegister(new ClassLoader[]{
-                                    param.thisObject.getClass().getClassLoader()
-                            });
-                        }
-                    });
+            Method onCreate = Activity.class.getDeclaredMethod("onCreate", Bundle.class);
+            activityHook = hook(onCreate).intercept(chain -> {
+                try {
+                    tryRegister(new ClassLoader[]{
+                            chain.getThisObject().getClass().getClassLoader()});
+                } catch (Throwable t) {
+                    log("activity retry failed: " + t);
+                }
+                chain.proceed();
+                return null;
+            });
             log("activity onCreate retry armed");
         } catch (Throwable t) {
-            log("activity hook failed: " + t);
+            log("cannot arm activity hook: " + t);
+        }
+    }
+
+    private void unhookActivityRetry() {
+        HookHandle handle = activityHook;
+        if (handle != null) {
+            activityHook = null;
+            try {
+                handle.unhook();
+                log("activity onCreate retry unhooked");
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -130,10 +163,10 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     /** Tries each loader; the first one able to resolve Edge's privacy fragment gets hooked. */
-    private static void tryRegister(ClassLoader[] candidates) {
-        if (REGISTERED.get()) return;
+    private void tryRegister(ClassLoader[] candidates) {
+        if (registered.get()) return;
         for (ClassLoader cl : candidates) {
-            if (cl == null || REGISTERED.get()) continue;
+            if (cl == null || registered.get()) continue;
             Class<?> privacy = findClassQuietly(PRIVACY_FRAGMENT, cl);
             if (privacy == null) continue;
             Method onCreate = findOnCreatePreferences(privacy);
@@ -141,24 +174,25 @@ public class MainHook implements IXposedHookLoadPackage {
                 log("no (Bundle,String)->void method on " + privacy.getName());
                 continue;
             }
-            if (!REGISTERED.compareAndSet(false, true)) return;
+            if (!registered.compareAndSet(false, true)) return;
             try {
-                XposedBridge.hookMethod(onCreate, new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) {
-                                try {
-                                    inject(param.thisObject, cl);
-                                } catch (Throwable t) {
-                                    log("inject failed: " + t);
-                                    log(t);
-                                }
-                            }
-                        });
+                hook(onCreate).intercept(chain -> {
+                    chain.proceed();
+                    try {
+                        inject(chain.getThisObject(), cl);
+                    } catch (Throwable t) {
+                        log("inject failed");
+                        log(t);
+                    }
+                    return null;
+                });
                 log("hooked " + privacy.getName() + "." + onCreate.getName()
                         + " via loader " + loaderName(cl));
+                unhookActivityRetry();
             } catch (Throwable t) {
-                REGISTERED.set(false);
-                log("hook failed: " + t);
+                registered.set(false);
+                log("hook failed");
+                log(t);
             }
             return;
         }
@@ -170,7 +204,7 @@ public class MainHook implements IXposedHookLoadPackage {
      * fragment class is enumerated — its declared methods use resolvable base-APK types, unlike
      * androidx.preference.Preference which Edge's R8 polluted with isolated-split types.
      */
-    private static Method findOnCreatePreferences(Class<?> privacy) {
+    private Method findOnCreatePreferences(Class<?> privacy) {
         for (String name : PRIVACY_ON_CREATE_CANDIDATES) {
             try {
                 return privacy.getDeclaredMethod(name, Bundle.class, String.class);
@@ -191,7 +225,7 @@ public class MainHook implements IXposedHookLoadPackage {
         return null;
     }
 
-    private static void inject(Object fragment, ClassLoader registeredLoader) {
+    private void inject(Object fragment, ClassLoader registeredLoader) {
         // Edge loads parts of its code through a custom class loader (isolated splits); the
         // fragment instance itself was created by the loader that can see all of it, so prefer
         // that one for every lookup below.
@@ -231,11 +265,19 @@ public class MainHook implements IXposedHookLoadPackage {
         }
 
         boolean zh = "zh".equals(localeLang(ctx));
-        String resTitle = safeString(ctx, RES_SECURE_DNS_TITLE, "dns");
-        String title = resTitle != null ? resTitle : (zh ? FALLBACK_TITLE_ZH : FALLBACK_TITLE_EN);
-        String resSummary = resTitle != null ? safeString(ctx, RES_SECURE_DNS_SUMMARY, null) : null;
-        String summary = resSummary != null ? resSummary
-                : (zh ? FALLBACK_SUMMARY_ZH : FALLBACK_SUMMARY_EN);
+        String title = null;
+        String summary = null;
+        for (int[] ids : RES_SECURE_DNS_IDS) {
+            String t = safeString(ctx, ids[0], "dns");
+            if (t == null) continue;
+            title = t;
+            summary = safeString(ctx, ids[1], null);
+            break;
+        }
+        if (title == null) {
+            title = zh ? FALLBACK_TITLE_ZH : FALLBACK_TITLE_EN;
+            summary = zh ? FALLBACK_SUMMARY_ZH : FALLBACK_SUMMARY_EN;
+        }
 
         invoke(pref, "setKey", new Class<?>[]{String.class}, KEY_SECURE_DNS);
         invoke(pref, "setPersistent", new Class<?>[]{boolean.class}, false);
@@ -259,7 +301,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
     private static Class<?> findClassQuietly(String name, ClassLoader cl) {
         try {
-            return XposedHelpers.findClassIfExists(name, cl);
+            return Class.forName(name, false, cl);
         } catch (Throwable t) {
             return null;
         }
@@ -272,7 +314,7 @@ public class MainHook implements IXposedHookLoadPackage {
         return null;
     }
 
-    private static Object newPreference(Context ctx, ClassLoader cl) {
+    private Object newPreference(Context ctx, ClassLoader cl) {
         for (String name : PREFERENCE_IMPLS) {
             Class<?> cls = findClassQuietly(name, cl);
             if (cls == null) continue;
@@ -301,13 +343,13 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     /**
-     * Reflection by exact name+signature. XposedHelpers.callMethod must NOT be used on Edge
-     * preference objects: it enumerates every declared method (Class.getDeclaredMethods), and
-     * Edge's R8 merged an account-module method with an isolated-split parameter type into
-     * androidx.preference.Preference, whose resolution throws NoClassDefFoundError. getMethod
-     * only resolves parameter types of same-name candidates, which are plain framework types.
+     * Reflection by exact name+signature. CallMethod-style enumeration must NOT be used on Edge
+     * preference objects: enumerating every declared method (Class.getDeclaredMethods) fails on
+     * Edge's R8-merged androidx.preference.Preference, whose isolated-split parameter types throw
+     * NoClassDefFoundError. getMethod only resolves parameter types of same-name candidates,
+     * which are plain framework types.
      */
-    private static void invoke(Object target, String name, Class<?>[] sig, Object... args) {
+    private void invoke(Object target, String name, Class<?>[] sig, Object... args) {
         try {
             Method m = target.getClass().getMethod(name, sig);
             m.setAccessible(true);
@@ -320,7 +362,8 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     /** Returns the resource string, or null when the id is missing/looks wrong for this build. */
-    private static String safeString(Context ctx, int resId, String mustContainLowercase) {
+    private static String safeString(Context ctx, int resId,
+                                     String mustContainLowercase) {
         try {
             String s = ctx.getString(resId);
             if (s == null || s.isEmpty()) return null;
@@ -347,11 +390,11 @@ public class MainHook implements IXposedHookLoadPackage {
         return cl == null ? "null" : cl.getClass().getName();
     }
 
-    private static void log(String msg) {
-        XposedBridge.log("[" + TAG + "] " + msg);
+    private void log(String msg) {
+        log(Log.INFO, TAG, msg);
     }
 
-    private static void log(Throwable t) {
-        XposedBridge.log("[" + TAG + "] " + android.util.Log.getStackTraceString(t));
+    private void log(Throwable t) {
+        log(Log.ERROR, TAG, t.getClass().getName(), t);
     }
 }
