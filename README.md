@@ -37,9 +37,12 @@
 
 Edge 的真实隐私页是 `org.chromium.chrome.browser.edge_settings.EdgePrivacySettings`，
 它加载的 Edge 专属 XML（edge_privacy_preferences_v2）里没有 secure_dns 条目；而完整的安全
-DNS 设置页（`org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings`）及其多语言
-文案仍随 APK 发布。模块在其 `onCreatePreferences` 结束后动态构造一个「使用安全的 DNS」偏好
-项（复用 Edge 自带的字符串与样式），点击即启动原生安全 DNS 设置页。
+DNS 设置页（`org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings`）仍随 APK
+发布。模块 hook 该隐私页的 `onResume`（Fragment 生命周期回调，各版本均保持原名，不像
+`onCreatePreferences` 那样会被 R8 每个版本改一次方法名），在页面恢复后动态构造一个
+「使用安全的 DNS」偏好项加入 security 分区，点击即启动原生安全 DNS 设置页。标题与摘要
+取自模块自身资源（`values/` + `values-zh/`，随系统语言自动选择），不依赖任何 Edge 字符串
+资源 id。
 
 Edge 安装了自定义 AppComponentFactory，其类加载器在经典 API 的 `handleLoadPackage` 时机还
 不可见；现代 API 的 `onPackageReady` 回调在 AppComponentFactory 实例化类加载器之后触发，

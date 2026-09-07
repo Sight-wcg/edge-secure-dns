@@ -2,4 +2,6 @@
 <resources>
     <string name="app_name">Edge 安全 DNS</string>
     <string name="module_description">恢复 Microsoft Edge (Chromium) 设置中隐藏的「使用安全 DNS」入口</string>
+    <string name="secure_dns_title">使用安全的 DNS</string>
+    <string name="secure_dns_summary">确定如何通过安全连接来连接到网站</string>
 </resources>

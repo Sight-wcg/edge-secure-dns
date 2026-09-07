@@ -20,11 +20,19 @@ import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam;
  * Edge's real privacy page is org.chromium.chrome.browser.edge_settings.EdgePrivacySettings,
  * which inflates the Edge-specific XML edge_privacy_preferences_v2 that has no secure_dns entry.
  * The complete secure DNS fragment (org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings)
- * and its localized strings are still shipped in the APK, so re-adding one preference that
- * launches that fragment brings the whole feature back.
+ * is still shipped in the APK, so re-adding one preference that launches that fragment brings
+ * the whole feature back. The entry's title/summary come from this module's own resources
+ * (values/ + values-zh/), so no Edge string resource ids are baked in.
  *
  * Built against the modern Xposed API (libxposed API 102); requires a framework that implements
  * it (minApiVersion=101 in META-INF/xposed/module.prop). Legacy de.robv APIs are not used.
+ *
+ * The hook target is EdgePrivacySettings.onResume, a Fragment lifecycle override that keeps its
+ * name in every build (unlike onCreatePreferences, which R8 renames per release — "T1" on
+ * Canary 154, "R1" on Beta 153, "O1" on Stable 151) and is unique per class, so locating it is a
+ * plain getDeclaredMethod("onResume") with no candidate-name guessing. Injecting after onResume
+ * is idempotent: once the secure_dns entry exists the hook only ensures it stays visible, and if
+ * a later onResume re-creates the list the entry is re-added automatically.
  *
  * Edge installs a custom AppComponentFactory whose class loader differs from the default one.
  * The modern lifecycle covers this directly: onPackageLoaded offers the default loader, and
@@ -46,13 +54,6 @@ public class MainHook extends XposedModule {
     /** onCreatePreferences of Edge's real privacy page (verified: Edge Beta 153 / Canary 154). */
     private static final String PRIVACY_FRAGMENT =
             "org.chromium.chrome.browser.edge_settings.EdgePrivacySettings";
-    /**
-     * Known names of the privacy fragment's onCreatePreferences. The method is R8-renamed in
-     * release builds ("R1" on Beta 153, "T1" on Canary 154); these are only fast-path hints —
-     * if none matches, the method is located by its (Bundle, String) -> void signature instead.
-     */
-    private static final String[] PRIVACY_ON_CREATE_CANDIDATES = {
-            "T1", "R1", "onCreatePreferences"};
 
     /** First loadable wins; later candidates cover older/newer Chromium layouts. */
     private static final String[] SECURE_DNS_FRAGMENT_CANDIDATES = {
@@ -73,14 +74,10 @@ public class MainHook extends XposedModule {
     private static final int ORDER_IN_CATEGORY = 5;
 
     /**
-     * Secure DNS title/summary string ids, verified per build (all content-checked at runtime;
-     * resource ids shift between Edge releases, so every known build gets its own pair).
+     * Embedded labels, used only when the module's own resources cannot be resolved from inside
+     * Edge's process (createPackageContext on the module package fails). Preferred path reads
+     * R.string.secure_dns_title/summary, which follow the device language automatically.
      */
-    private static final int[][] RES_SECURE_DNS_IDS = {
-            {0x7f14272a, 0x7f142727}, // Edge Beta 153.0.4234.18
-            {0x7f142785, 0x7f142782}, // Edge Canary 154.0.4257.0
-    };
-
     private static final String FALLBACK_TITLE_ZH = "使用安全的 DNS";
     private static final String FALLBACK_SUMMARY_ZH = "确定如何通过安全连接来连接到网站";
     private static final String FALLBACK_TITLE_EN = "Use secure DNS";
@@ -169,14 +166,16 @@ public class MainHook extends XposedModule {
             if (cl == null || registered.get()) continue;
             Class<?> privacy = findClassQuietly(PRIVACY_FRAGMENT, cl);
             if (privacy == null) continue;
-            Method onCreate = findOnCreatePreferences(privacy);
-            if (onCreate == null) {
-                log("no (Bundle,String)->void method on " + privacy.getName());
+            Method onResume;
+            try {
+                onResume = privacy.getDeclaredMethod("onResume");
+            } catch (NoSuchMethodException e) {
+                log(privacy.getName() + " does not override onResume");
                 continue;
             }
             if (!registered.compareAndSet(false, true)) return;
             try {
-                hook(onCreate).intercept(chain -> {
+                hook(onResume).intercept(chain -> {
                     chain.proceed();
                     try {
                         inject(chain.getThisObject(), cl);
@@ -186,8 +185,7 @@ public class MainHook extends XposedModule {
                     }
                     return null;
                 });
-                log("hooked " + privacy.getName() + "." + onCreate.getName()
-                        + " via loader " + loaderName(cl));
+                log("hooked " + privacy.getName() + ".onResume via loader " + loaderName(cl));
                 unhookActivityRetry();
             } catch (Throwable t) {
                 registered.set(false);
@@ -196,33 +194,6 @@ public class MainHook extends XposedModule {
             }
             return;
         }
-    }
-
-    /**
-     * Locates onCreatePreferences on the privacy fragment: known names first (no method
-     * enumeration), then a signature scan over the fragment's own declared methods. Only the
-     * fragment class is enumerated — its declared methods use resolvable base-APK types, unlike
-     * androidx.preference.Preference which Edge's R8 polluted with isolated-split types.
-     */
-    private Method findOnCreatePreferences(Class<?> privacy) {
-        for (String name : PRIVACY_ON_CREATE_CANDIDATES) {
-            try {
-                return privacy.getDeclaredMethod(name, Bundle.class, String.class);
-            } catch (NoSuchMethodException ignored) {
-            }
-        }
-        try {
-            for (Method m : privacy.getDeclaredMethods()) {
-                Class<?>[] p = m.getParameterTypes();
-                if (p.length == 2 && p[0] == Bundle.class && p[1] == String.class
-                        && m.getReturnType() == void.class) {
-                    return m;
-                }
-            }
-        } catch (Throwable t) {
-            log("signature scan failed on " + privacy.getName() + ": " + t);
-        }
-        return null;
     }
 
     private void inject(Object fragment, ClassLoader registeredLoader) {
@@ -264,20 +235,9 @@ public class MainHook extends XposedModule {
             return;
         }
 
-        boolean zh = "zh".equals(localeLang(ctx));
-        String title = null;
-        String summary = null;
-        for (int[] ids : RES_SECURE_DNS_IDS) {
-            String t = safeString(ctx, ids[0], "dns");
-            if (t == null) continue;
-            title = t;
-            summary = safeString(ctx, ids[1], null);
-            break;
-        }
-        if (title == null) {
-            title = zh ? FALLBACK_TITLE_ZH : FALLBACK_TITLE_EN;
-            summary = zh ? FALLBACK_SUMMARY_ZH : FALLBACK_SUMMARY_EN;
-        }
+        String[] labels = moduleStrings(ctx);
+        String title = labels[0];
+        String summary = labels[1];
 
         invoke(pref, "setKey", new Class<?>[]{String.class}, KEY_SECURE_DNS);
         invoke(pref, "setPersistent", new Class<?>[]{boolean.class}, false);
@@ -361,19 +321,28 @@ public class MainHook extends XposedModule {
         }
     }
 
-    /** Returns the resource string, or null when the id is missing/looks wrong for this build. */
-    private static String safeString(Context ctx, int resId,
-                                     String mustContainLowercase) {
+    /**
+     * Returns [title, summary] for the injected entry. Preferred source is this module's own
+     * resources, resolved through a package Context for the module created from Edge's Context
+     * (Edge declares QUERY_ALL_PACKAGES, so createPackageContext can see the installed module).
+     * The module APK is a normal installed app with its own values/ + values-zh/, so the strings
+     * follow the device language without baking in any Edge resource ids. Falls back to the
+     * embedded constants when the module package is unreachable from Edge's process.
+     */
+    private String[] moduleStrings(Context hostCtx) {
         try {
-            String s = ctx.getString(resId);
-            if (s == null || s.isEmpty()) return null;
-            if (mustContainLowercase != null
-                    && !s.toLowerCase(java.util.Locale.US).contains(mustContainLowercase)) {
-                return null;
-            }
-            return s;
+            Context self = hostCtx.createPackageContext(getModuleApplicationInfo().packageName, 0);
+            return new String[]{
+                    self.getString(R.string.secure_dns_title),
+                    self.getString(R.string.secure_dns_summary),
+            };
         } catch (Throwable t) {
-            return null;
+            log("module resources unavailable, using embedded labels");
+            boolean zh = "zh".equals(localeLang(hostCtx));
+            return new String[]{
+                    zh ? FALLBACK_TITLE_ZH : FALLBACK_TITLE_EN,
+                    zh ? FALLBACK_SUMMARY_ZH : FALLBACK_SUMMARY_EN,
+            };
         }
     }
 
