@@ -1,7 +1,8 @@
 # Edge Secure DNS（恢复 Edge「使用安全 DNS」设置入口）
 
 一个 Xposed 模块（现代 libxposed API），恢复 Microsoft Edge 安卓版（Chromium 内核）设置中
-被隐藏的「隐私与安全 → 使用安全 DNS」入口。
+被隐藏的「隐私与安全 → 使用安全 DNS」入口，并在 Edge **Beta/Stable** 上补充 Canary 才有的
+「加载本地扩展(.crx)」开发者入口。
 
 - 作用域：`com.microsoft.emmx.beta`（Edge Beta）、`com.microsoft.emmx`（Edge 稳定版）、
   `com.microsoft.emmx.canary`（Edge Canary）
@@ -24,27 +25,10 @@
 2. 打开 Xposed 管理器 → 模块 → 启用「Edge Secure DNS」（作用域已通过 `scope.list` 静态声明为
    Edge Beta / Edge 稳定版，无需手动勾选）。
 3. 强制停止 Edge 后重新打开：设置 → 隐私、搜索和服务 → 隐私与安全 分区底部出现「使用安全的 DNS」。
-4. 点进去即为 Chromium 原生的安全 DNS 页（关闭 / 自动 / 手动选择供应商）。
+   点进去即为 Chromium 原生的安全 DNS 页（关闭 / 自动 / 手动选择供应商）。
 
-## 构建
+### 加载本地扩展（仅 Beta / Stable）
 
-- 命令行构建需要 **JDK 17+**（Xposed API 构件为 Java 17 字节码）与 Android SDK：
-  将 `local.properties.example` 复制为 `local.properties` 并按实际路径修改，
-  再以 `JAVA_HOME=<jdk-17+> ./gradlew assembleRelease` 构建。
-- CI（GitHub Actions）已使用 JDK 17，无需额外配置。
-
-## 工作原理
-
-Edge 的真实隐私页是 `org.chromium.chrome.browser.edge_settings.EdgePrivacySettings`，
-它加载的 Edge 专属 XML（edge_privacy_preferences_v2）里没有 secure_dns 条目；而完整的安全
-DNS 设置页（`org.chromium.chrome.browser.privacy.secure_dns.SecureDnsSettings`）仍随 APK
-发布。模块 hook 该隐私页的 `onResume`（Fragment 生命周期回调，各版本均保持原名，不像
-`onCreatePreferences` 那样会被 R8 每个版本改一次方法名），在页面恢复后动态构造一个
-「使用安全的 DNS」偏好项加入 security 分区，点击即启动原生安全 DNS 设置页。标题与摘要
-取自模块自身资源（`values/` + `values-zh/`，随系统语言自动选择），不依赖任何 Edge 字符串
-资源 id。
-
-Edge 安装了自定义 AppComponentFactory，其类加载器在经典 API 的 `handleLoadPackage` 时机还
-不可见；现代 API 的 `onPackageReady` 回调在 AppComponentFactory 实例化类加载器之后触发，
-正好拿到 Edge 的类加载器。模块另以 `Activity.onCreate` 兜底重试，覆盖隐私页类加载时机异常
-晚的版本。
+在 Edge **稳定版 / Beta** 上，设置 → 关于（连点版本号 7 次开启开发者选项）→ 开发者选项页底部会
+出现一条「加载本地扩展」。点击后用系统文件选择器选取一个 `.crx` 扩展文件，即可走 Edge 内置的
+安装流程安装（Canary 本身已带原生入口，故不注入）。

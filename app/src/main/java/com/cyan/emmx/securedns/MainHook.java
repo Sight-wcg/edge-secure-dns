@@ -88,6 +88,8 @@ public class MainHook extends XposedModule {
     private final AtomicBoolean registered = new AtomicBoolean(false);
     private HookHandle activityHook;
 
+    private ExtensionUnlock extUnlock;
+
     @Override
     public void onModuleLoaded(ModuleLoadedParam param) {
         log("loaded into " + param.getProcessName()
@@ -101,7 +103,8 @@ public class MainHook extends XposedModule {
         if (!isTarget(param.getPackageName())) return;
         log("onPackageLoaded " + param.getPackageName()
                 + " (default loader=" + loaderName(param.getDefaultClassLoader()) + ")");
-        tryRegister(new ClassLoader[]{param.getDefaultClassLoader()});
+        tryRegisterAll(new ClassLoader[]{param.getDefaultClassLoader()},
+                ExtensionUnlock.targets(param.getPackageName()));
     }
 
     /**
@@ -113,9 +116,26 @@ public class MainHook extends XposedModule {
         if (!isTarget(param.getPackageName())) return;
         log("onPackageReady " + param.getPackageName()
                 + " (loader=" + loaderName(param.getClassLoader()) + ")");
-        tryRegister(new ClassLoader[]{param.getClassLoader(), param.getDefaultClassLoader()});
+        tryRegisterAll(new ClassLoader[]{param.getClassLoader(), param.getDefaultClassLoader()},
+                ExtensionUnlock.targets(param.getPackageName()));
+    }
 
-        if (!registered.get() && activityHook == null) {
+    /** Arms the secure-DNS and (on Beta/Stable) the extension hooks through the given loaders. */
+    private void tryRegisterAll(ClassLoader[] loaders, boolean withExtension) {
+        tryRegister(loaders);
+        if (withExtension) {
+            if (extUnlock == null) extUnlock = new ExtensionUnlock(this);
+            extUnlock.tryRegister(loaders);
+        }
+
+        // Retry on Activity creation until everything this channel needs is hooked: secure DNS
+        // on all channels, plus the DeveloperSettings extension row on Beta/Stable (that class
+        // is only reachable once Edge's full class loader is up).
+        boolean incomplete = !registered.get();
+        if (withExtension) {
+            incomplete |= extUnlock == null || !extUnlock.isRegistered();
+        }
+        if (incomplete && activityHook == null) {
             armActivityRetry();
         }
     }
@@ -126,12 +146,17 @@ public class MainHook extends XposedModule {
             Method onCreate = Activity.class.getDeclaredMethod("onCreate", Bundle.class);
             activityHook = hook(onCreate).intercept(chain -> {
                 try {
-                    tryRegister(new ClassLoader[]{
-                            chain.getThisObject().getClass().getClassLoader()});
+                    ClassLoader cl = chain.getThisObject().getClass().getClassLoader();
+                    tryRegister(new ClassLoader[]{cl});
+                    if (extUnlock != null) extUnlock.tryRegister(new ClassLoader[]{cl});
                 } catch (Throwable t) {
                     log("activity retry failed: " + t);
                 }
                 chain.proceed();
+
+                boolean dnsDone = registered.get();
+                boolean extDone = extUnlock == null || extUnlock.isRegistered();
+                if (dnsDone && extDone) unhookActivityRetry();
                 return null;
             });
             log("activity onCreate retry armed");
@@ -186,7 +211,8 @@ public class MainHook extends XposedModule {
                     return null;
                 });
                 log("hooked " + privacy.getName() + ".onResume via loader " + loaderName(cl));
-                unhookActivityRetry();
+                // The Activity retry (if armed) self-unhooks once secure-DNS and the extension
+                // unlock are both registered, so nothing to do here.
             } catch (Throwable t) {
                 registered.set(false);
                 log("hook failed");

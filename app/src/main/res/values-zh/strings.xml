@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Edge 安全 DNS</string>
-    <string name="module_description">恢复 Microsoft Edge (Chromium) 设置中隐藏的「使用安全 DNS」入口</string>
+    <string name="module_description">恢复 Microsoft Edge (Chromium) 设置中隐藏的「使用安全 DNS」入口，并在 Beta/稳定版补充「加载本地扩展(.crx)」开发者入口</string>
     <string name="secure_dns_title">使用安全的 DNS</string>
     <string name="secure_dns_summary">确定如何通过安全连接来连接到网站</string>
+
+    <string name="load_local_extension_title">加载本地扩展</string>
+    <string name="load_local_extension_summary">从本地的 .crx 文件安装扩展（开发者选项）</string>
+    <string name="load_local_extension_choose_crx">选择 .crx 文件</string>
 </resources>

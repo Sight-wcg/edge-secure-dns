@@ -13,6 +13,7 @@ dist/
 captures/
 .externalNativeBuild/
 .cxx/
+.tmp/
 
 # IDE
 .idea/
