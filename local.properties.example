@@ -2,3 +2,6 @@
 # 用 Android Studio 打开本工程通常无需此文件；仅命令行构建时需要指定 SDK 位置，
 # 也可以改用环境变量 ANDROID_HOME 代替。
 sdk.dir=D:/path/to/Android/Sdk
+#
+# 命令行构建另需 JDK 17+（Xposed API 构件为 Java 17 字节码），例如：
+#   JAVA_HOME=D:/path/to/jdk-17 ./gradlew assembleRelease

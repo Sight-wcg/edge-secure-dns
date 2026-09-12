@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Edge Secure DNS</string>
+    <string name="module_description">Restore hidden settings in Microsoft Edge (Chromium): the \"Use secure DNS\" entry, and a \"Load local extension\" (.crx) developer entry on Beta/Stable</string>
+    <string name="secure_dns_title">Use secure DNS</string>
+    <string name="secure_dns_summary">Determines how to connect to websites over a secure connection</string>
+
+    <string name="load_local_extension_title">Load local extension</string>
+    <string name="load_local_extension_summary">Install an extension from a local .crx file (developer option)</string>
+    <string name="load_local_extension_choose_crx">Choose .crx file</string>
 </resources>
